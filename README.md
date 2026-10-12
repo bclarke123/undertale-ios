@@ -10,6 +10,19 @@
 <a href="https://discord.gg/2gQR7t3WJR"><img src="https://img.shields.io/discord/1406856655920168971?color=5865F2&logo=discord&logoColor=white&label=discord"></a>
 </p>
 
+> [!NOTE]
+> **This is a fork of [Butterscotch](https://github.com/ButterscotchRunner/Butterscotch) that adds an iOS/iPadOS port** (touch controls, game controller support, and an optional quick save/load for Undertale). See [iOS / iPadOS](#ios--ipados) below.
+
+## No game files or copyrighted code
+
+**This repository contains no game data, art, music, or code from Undertale or any other game.** Everything here is either Butterscotch's own open-source runner (AGPL-3.0) or original code written for this port.
+
+* The game's `data.win`, music (`.ogg`) and `options.ini` are **not included** and are never committed. You supply them from **your own legally purchased copy** at build time (`-DGAME_DIR=...`), and they're copied into your local app bundle only. `.gitignore` blocks them from the repo.
+* The quick save/load feature calls the game's own built-in save and load routines by name (e.g. `scr_save`, `scr_load`), at runtime, from the game files you provide. No game code is copied, decompiled, or redistributed.
+* No app icon is included. Use your own image (`-DIOS_ICON=...`).
+* This project is **not affiliated with, endorsed by, or connected to** Toby Fox, YoYo Games, or any game publisher. Undertale and other game names are trademarks of their respective owners and are mentioned only to describe compatibility.
+* This is for personal use: playing a game you own on your own device. Do not distribute builds that include game files.
+
 > [!IMPORTANT]
 > Butterscotch may have quirks that the original GameMaker: Studio runner may not have!
 
@@ -57,6 +70,7 @@ Of course, some games won't run! Some games aren't VM compiled, such as:
 * PlayStation 3
 * PlayStation Vita
 * Nintendo Switch
+* iOS / iPadOS (this fork)
 * ...and maybe more in the future!
 
 Butterscotch can be ported to about any console that has the processing power to run it! Butterscotch has already been ported to many consoles such as the Xbox 360, Wii, 3DS, and more!
@@ -139,6 +153,50 @@ make
 If you are using CLion, set the platform in `Settings` > `Build, Execution, Deployment` > `CMake` and add `-DBACKEND=glfw3`
 
 Then run Butterscotch with `./butterscotch` - it will automatically search for `data.win`, `assets/game.unx`, `assets/game.droid` or `../Resources/game.ios` relative to the binary, otherwise you can specify a path with `./butterscotch /path/to/data.win`.
+
+## iOS / iPadOS
+
+Runs GameMaker: Studio games natively on iPad/iPhone (iOS 16+, arm64) using the SDL3 backend and OpenGL ES 3.0. Tested with Undertale v1.08 on an iPad Pro (2018) and an iPad Pro (M5).
+
+**Features**
+
+* On-screen touch controls: 8-way D-pad, Z / X / C buttons (hidden automatically when a game controller is connected)
+* Bluetooth game controllers (via SDL3)
+* Saves stored in the app's Documents folder, visible in the Files app
+* **Undertale only:** quick save anywhere (SAVE button, L1+R1, or F7) and quick load anywhere (hold LOAD for 1 second, L2+R2, or F9). These run the game's own save/load routines, so saves are identical to save-point saves.
+
+**Requirements**
+
+* A Mac with Xcode, an Apple developer account (a free account works, but its builds expire after 7 days; a paid account lasts a year), and CMake
+* Your own copy of the game files (for Undertale: the Windows/Steam version's `data.win`, `*.ogg`, `options.ini`)
+* SDL3 source (tested with `release-3.4.16`)
+
+**Building**
+
+```bash
+git clone --branch release-3.4.16 https://github.com/libsdl-org/SDL.git deps/SDL   # next to this repo, or pass -DSDL3_SOURCE_DIR=...
+git clone <this repo> Butterscotch
+cd Butterscotch
+
+cmake -B build-ios -G Xcode -DPLATFORM=ios \
+  -DGAME_DIR=/path/to/your/game \
+  -DIOS_APP_NAME="My Game" \
+  -DIOS_BUNDLE_ID=com.yourname.mygame \
+  -DIOS_DEVELOPMENT_TEAM=YOURTEAMID \
+  -DIOS_ICON=/path/to/1024x1024.png    # optional
+
+open build-ios/*.xcodeproj    # pick your device, then Run
+```
+
+Or from the command line:
+
+```bash
+xcodebuild -project build-ios/*.xcodeproj -scheme butterscotch -configuration Release \
+  -destination 'generic/platform=iOS' -allowProvisioningUpdates build
+xcrun devicectl device install app --device <device-id> <path to built butterscotch.app>
+```
+
+Your team ID is shown in Xcode → Settings → Accounts, or at developer.apple.com → Membership. The device must have Developer Mode enabled (Settings → Privacy & Security).
 
 ## CLI parameters
 

@@ -32,6 +32,7 @@
 #include "runner_keyboard.h"
 #include "runner.h"
 #include "input_recording.h"
+#include "quicksave.h"
 #include "debug_overlay.h"
 #include "debug_font/debug_font.h"
 #if (defined(ENABLE_LEGACY_GL) || defined(ENABLE_MODERN_GL) || ((defined(USE_GLFW3) || defined(USE_GLFW2)) && defined(ENABLE_SW_RENDERER))) && \
@@ -913,6 +914,9 @@ int loop(CommandLineArgs args, const char *argv0) {
 #ifdef ENABLE_MODERN_GL
         if (gfx == MODERN_GL) {
             renderer = GLRenderer_create();
+#ifdef PLATFORM_IOS
+            ((GLModernRenderer *)renderer)->hostFramebuffer = platformGetHostFramebuffer();
+#endif
             hostFramebuffer = &((GLModernRenderer *)renderer)->hostFramebuffer;
         }
 #endif
@@ -1202,6 +1206,26 @@ int loop(CommandLineArgs args, const char *argv0) {
                 if (RunnerKeyboard_check(runner->keyboard, VK_RIGHT)) {
                     runner->freeCamPanX += (float) (0.000005f * runner->deltaTime);
                 }
+            }
+
+            // Undertale "save anywhere" (on iOS the on-screen SAVE button and the controller combo press F7 too)
+            if (RunnerKeyboard_checkPressed(runner->keyboard, VK_F7)) {
+                QuickSaveResult result = QuickSave_undertale(runner);
+#ifdef PLATFORM_IOS
+                platformShowQuickSaveResult(result);
+#else
+                if (result == QUICKSAVE_BUSY) logInfo("QuickSave: can't save right now\n");
+#endif
+            }
+
+            // Undertale "load anywhere" (on iOS the controller combo presses F9 too)
+            if (RunnerKeyboard_checkPressed(runner->keyboard, VK_F9)) {
+                QuickLoadResult result = QuickLoad_undertale(runner);
+#ifdef PLATFORM_IOS
+                platformShowQuickLoadResult(result);
+#else
+                if (result != QUICKLOAD_LOADED) logInfo("QuickLoad: can't load right now (%d)\n", result);
+#endif
             }
 
             // Reset global interact state because I HATE when I get stuck while moving through rooms

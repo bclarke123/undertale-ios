@@ -24,9 +24,19 @@ if(PLATFORM STREQUAL "vita")
     endif()
 
     set(BACKEND "sdl2")
+elseif(PLATFORM STREQUAL "ios")
+    set(CMAKE_SYSTEM_NAME iOS)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "16.0" CACHE STRING "Minimum iOS version")
+    set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "")
+    set(BACKEND "sdl3")
+    set(VIDEO_BACKEND "none" CACHE STRING "Video playback backend (ffmpeg or none)" FORCE)
+    set(ENABLE_LEGACY_GL OFF CACHE BOOL "Enable the legacy OpenGL renderer" FORCE)
 endif()
 
 project(butterscotch C)
+if(PLATFORM STREQUAL "ios")
+    enable_language(OBJC)
+endif()
 
 if (PLATFORM STREQUAL "vita")
     include("${VITASDK}/share/vita.cmake" REQUIRED)
@@ -378,7 +388,7 @@ if(ENABLE_VM_EXCEPTIONS_LOGS)
     add_compile_definitions(ENABLE_VM_EXCEPTIONS_LOGS)
 endif()
 
-if(PLATFORM STREQUAL "cli" OR PLATFORM STREQUAL "vita" OR PLATFORM STREQUAL "switch" OR PLATFORM STREQUAL "web")
+if(PLATFORM STREQUAL "cli" OR PLATFORM STREQUAL "vita" OR PLATFORM STREQUAL "switch" OR PLATFORM STREQUAL "web" OR PLATFORM STREQUAL "ios")
     if(PLATFORM STREQUAL "vita")
         # Normally, __VITA__ should already be defined, but for some reason,
         # in my case, this didn't really work... so just in case, when we're
@@ -400,6 +410,17 @@ if(PLATFORM STREQUAL "cli" OR PLATFORM STREQUAL "vita" OR PLATFORM STREQUAL "swi
     elseif(PLATFORM STREQUAL "web")
         add_compile_definitions(PLATFORM_WEB)
         target_sources(butterscotch PRIVATE src/cli/args.c)
+    elseif(PLATFORM STREQUAL "ios")
+        add_compile_definitions(PLATFORM_IOS)
+        target_sources(butterscotch PRIVATE src/ios/touch_overlay.m)
+        target_compile_options(butterscotch PRIVATE $<$<COMPILE_LANGUAGE:OBJC>:-fobjc-arc>)
+        # miniaudio's CoreAudio backend uses AVAudioSession on iOS, so it has to be built as Objective-C
+        set_source_files_properties(src/audio/miniaudio/ma_audio_system.c PROPERTIES LANGUAGE OBJC)
+
+        set(VM_GML_PROFILER_DEFAULT OFF)
+        set(VM_TRACING_DEFAULT OFF)
+        set(VM_OPCODE_PROFILER_DEFAULT OFF)
+        set(VM_STUB_LOGS_DEFAULT OFF)
     else()
         set(VM_GML_PROFILER_DEFAULT ON)
         set(VM_TRACING_DEFAULT ON)
@@ -523,6 +544,21 @@ if(PLATFORM STREQUAL "cli" OR PLATFORM STREQUAL "vita" OR PLATFORM STREQUAL "swi
         target_include_directories(butterscotch PRIVATE ${SDL2_INCLUDE_DIRS})
         target_link_directories(butterscotch PRIVATE ${SDL2_LIBRARY_DIRS})
         set(BACKEND_LIBRARIES ${SDL2_LIBRARIES})
+    elseif(BACKEND STREQUAL "sdl3" AND PLATFORM STREQUAL "ios")
+        add_compile_definitions(USE_SDL3)
+
+        # Build SDL3 from source as a static library, there are no prebuilt iOS packages to pkg-config against
+        set(SDL3_SOURCE_DIR "${CMAKE_SOURCE_DIR}/../deps/SDL" CACHE PATH "Path to the SDL3 source tree")
+        set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+        set(SDL_STATIC ON CACHE BOOL "" FORCE)
+        set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
+        add_subdirectory(${SDL3_SOURCE_DIR} ${CMAKE_BINARY_DIR}/SDL3 EXCLUDE_FROM_ALL)
+        # SDL needs precise float semantics (#pragma STDC FENV_ACCESS), undo the project-wide -ffast-math
+        target_compile_options(SDL3-static PRIVATE -fno-fast-math)
+        set(BACKEND_LIBRARIES SDL3::SDL3-static
+            "-framework UIKit" "-framework Foundation" "-framework QuartzCore" "-framework OpenGLES"
+            "-framework AVFoundation" "-framework AudioToolbox" "-framework CoreAudio"
+            "-framework GameController" "-framework CoreHaptics" "-framework CoreMotion")
     elseif(BACKEND STREQUAL "sdl3")
         add_compile_definitions(USE_SDL3)
 
@@ -612,6 +648,50 @@ if(PLATFORM STREQUAL "cli" OR PLATFORM STREQUAL "vita" OR PLATFORM STREQUAL "swi
         else()
             nx_create_nro(butterscotch NACP Butterscotch.nacp)
         endif()
+    elseif (PLATFORM STREQUAL "ios")
+        # Game files (data.win + external music) are copied from GAME_DIR into the root of the app bundle
+        set(GAME_DIR "" CACHE PATH "Folder containing the game's data.win and .ogg files")
+        if(GAME_DIR STREQUAL "" OR NOT EXISTS "${GAME_DIR}/data.win")
+            message(FATAL_ERROR "Set GAME_DIR to a folder containing data.win")
+        endif()
+        set(IOS_BUNDLE_ID "com.example.butterscotch" CACHE STRING "Bundle identifier")
+        set(IOS_APP_NAME "Butterscotch" CACHE STRING "Name shown on the home screen")
+        set(IOS_DEVELOPMENT_TEAM "" CACHE STRING "Apple development team ID used for signing")
+
+        set_target_properties(butterscotch PROPERTIES
+            MACOSX_BUNDLE TRUE
+            MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/src/ios/Info.plist.in"
+            MACOSX_BUNDLE_GUI_IDENTIFIER "${IOS_BUNDLE_ID}"
+            MACOSX_BUNDLE_BUNDLE_NAME "${IOS_APP_NAME}"
+            XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "${IOS_BUNDLE_ID}"
+            XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
+            XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Automatic"
+            XCODE_ATTRIBUTE_DEVELOPMENT_TEAM "${IOS_DEVELOPMENT_TEAM}"
+            XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "Apple Development"
+        )
+
+        file(GLOB GAME_MUSIC "${GAME_DIR}/*.ogg")
+        set(GAME_FILES "${GAME_DIR}/data.win" ${GAME_MUSIC})
+        foreach(f IN ITEMS audiogroup1.dat audiogroup2.dat audiogroup3.dat options.ini)
+            if(EXISTS "${GAME_DIR}/${f}")
+                list(APPEND GAME_FILES "${GAME_DIR}/${f}")
+            endif()
+        endforeach()
+        target_sources(butterscotch PRIVATE ${GAME_FILES} src/ios/LaunchScreen.storyboard)
+        set_source_files_properties(${GAME_FILES} src/ios/LaunchScreen.storyboard PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+
+        # Optional 1024x1024 app icon, wrapped into an asset catalog in the build dir (kept out of the source tree since it's usually a game asset)
+        set(IOS_ICON "" CACHE FILEPATH "1024x1024 PNG used as the app icon")
+        if(NOT IOS_ICON STREQUAL "")
+            set(ICON_CATALOG "${CMAKE_BINARY_DIR}/Assets.xcassets")
+            configure_file("${IOS_ICON}" "${ICON_CATALOG}/AppIcon.appiconset/AppIcon.png" COPYONLY)
+            file(WRITE "${ICON_CATALOG}/Contents.json" "{\"info\":{\"version\":1,\"author\":\"xcode\"}}\n")
+            file(WRITE "${ICON_CATALOG}/AppIcon.appiconset/Contents.json"
+                "{\"images\":[{\"filename\":\"AppIcon.png\",\"idiom\":\"universal\",\"platform\":\"ios\",\"size\":\"1024x1024\"}],\"info\":{\"version\":1,\"author\":\"xcode\"}}\n")
+            target_sources(butterscotch PRIVATE "${ICON_CATALOG}")
+            set_source_files_properties("${ICON_CATALOG}" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+            set_target_properties(butterscotch PROPERTIES XCODE_ATTRIBUTE_ASSETCATALOG_COMPILER_APPICON_NAME "AppIcon")
+        endif()
     elseif (PLATFORM STREQUAL "web")
         set_target_properties(butterscotch PROPERTIES SUFFIX ".mjs")
 
@@ -660,12 +740,14 @@ if(PLATFORM STREQUAL "cli" OR PLATFORM STREQUAL "vita" OR PLATFORM STREQUAL "swi
         target_link_options(butterscotch PRIVATE -fsanitize=address)
     endif()
 
-    #gamecontrollerdb
-    add_custom_command(TARGET butterscotch POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${CMAKE_SOURCE_DIR}/vendor/gamecontrollerdb.txt
-            $<TARGET_FILE_DIR:butterscotch>/gamecontrollerdb.txt
-    )
+    #gamecontrollerdb (iOS gets controller mappings from GameController.framework, and writing into a signed bundle breaks it)
+    if(NOT PLATFORM STREQUAL "ios")
+        add_custom_command(TARGET butterscotch POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CMAKE_SOURCE_DIR}/vendor/gamecontrollerdb.txt
+                $<TARGET_FILE_DIR:butterscotch>/gamecontrollerdb.txt
+        )
+    endif()
 elseif(PLATFORM STREQUAL "android")
     if (NOT ENABLE_MODERN_GL)
         message(FATAL_ERROR "Android requires modern gl!")

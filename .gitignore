@@ -6,3 +6,25 @@ CMakeUserPresets.json
 compat/config.mk
 /.vs
 *.log
+
+# Game files are copyrighted: never commit them, supply them via -DGAME_DIR at build time
+*.win
+*.ogg
+options.ini
+file[0-9]
+undertale.ini
+config.ini
+AppIcon.png
+ios-assets/
+save-backups/
+
+# Xcode / macOS
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+.DS_Store
+
+# ...except upstream's own test fixtures
+!tests/**/data.win
+!tests/**/options.ini

@@ -118,7 +118,20 @@ static void maInit(AudioSystem* audio, DataWin* dataWin, FileSystem* fileSystem)
     deviceConfig.periodSizeInMilliseconds = 10;
     deviceConfig.dataCallback = ma_engine_data_callback_internal;
     deviceConfig.pUserData    = &ma->engine;
-    ma_result deviceResult = ma_device_init(NULL, &deviceConfig, &ma->device);
+    ma_context* context = NULL;
+#ifdef PLATFORM_IOS
+    // miniaudio defaults to the PlayAndRecord session category on iOS, which is meant for apps using the microphone.
+    // SoloAmbient is the regular game category: silences other apps' audio and respects the silent switch.
+    static ma_context iosContext;
+    static bool iosContextInitialized = false;
+    if (!iosContextInitialized) {
+        ma_context_config contextConfig = ma_context_config_init();
+        contextConfig.coreaudio.sessionCategory = ma_ios_session_category_solo_ambient;
+        iosContextInitialized = ma_context_init(NULL, 0, &contextConfig, &iosContext) == MA_SUCCESS;
+    }
+    if (iosContextInitialized) context = &iosContext;
+#endif
+    ma_result deviceResult = ma_device_init(context, &deviceConfig, &ma->device);
     if (deviceResult != MA_SUCCESS) {
         logError("Audio: Failed to initialize playback device (error %d)\n", deviceResult);
         return;

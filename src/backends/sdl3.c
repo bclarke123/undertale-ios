@@ -10,12 +10,33 @@
 #include <ctype.h>
 #include <stdbool.h>
 #include "runner_mouse.h"
+#ifdef PLATFORM_IOS
+#include "touch_overlay.h"
+#include "quicksave.h"
+#endif
 
 static Runner *g_runner;
 static int32_t fbWidth, fbHeight;
 static SDL_Surface* scr;
 static SDL_Window *window;
 static SDL_Gamepad* openControllers[MAX_GAMEPADS];
+
+#ifdef PLATFORM_IOS
+static void platformOverlayKeyDown(int32_t gmlKey) {
+    if (InputRecording_isPlaybackActive(globalInputRecording)) return;
+    RunnerKeyboard_onKeyDown(g_runner->keyboard, gmlKey);
+}
+
+static void platformOverlayKeyUp(int32_t gmlKey) {
+    if (InputRecording_isPlaybackActive(globalInputRecording)) return;
+    RunnerKeyboard_onKeyUp(g_runner->keyboard, gmlKey);
+}
+
+static void glFinishProc(void) {
+    void (*finish)(void) = (void (*)(void))SDL_GL_GetProcAddress("glFinish");
+    if (finish) finish();
+}
+#endif
 
 static const int SDL_TO_GML_BUTTON[SDL_GAMEPAD_BUTTON_COUNT] = {
     [SDL_GAMEPAD_BUTTON_SOUTH]          = 0,
@@ -69,6 +90,12 @@ static SDL_Window *tryOpenWindow(int reqW, int reqH, const char* title, Uint32 f
         SDL_Window *newWindow;
         int contextFlags = 0;
 
+#ifdef PLATFORM_IOS
+        // iOS only has GLES 3.0 (and 2.0), skip everything else instead of creating and destroying windows for each
+        if (!GLCommon_versions[i].gles || GLCommon_versions[i].major > 3 || (GLCommon_versions[i].major == 3 && GLCommon_versions[i].minor > 0))
+            continue;
+#endif
+
         SDL_GL_ResetAttributes();
 #ifndef NDEBUG
         contextFlags |= SDL_GL_CONTEXT_DEBUG_FLAG;
@@ -117,6 +144,10 @@ void platformSetWindowTitle(const char* title) {
 
 bool platformGetWindowSize(int32_t* outW, int32_t* outH) {
     if (!outW || !outH) return false;
+#ifdef PLATFORM_IOS
+    // The GL drawable is in pixels, not points
+    SDL_GetWindowSizeInPixels(window, &fbWidth, &fbHeight);
+#endif
     *outW = fbWidth;
     *outH = fbHeight;
     return true;
@@ -128,6 +159,11 @@ bool platformGetScaledWindowSize(int32_t* outW, int32_t* outH) {
 
 void platformSetWindowSize(int32_t width, int32_t height) {
     if (width <= 0 || height <= 0) return;
+#ifdef PLATFORM_IOS
+    // Always fullscreen, the renderer letterboxes the game into the screen
+    (void)width; (void)height;
+    return;
+#endif
     fbWidth = width;
     fbHeight = height;
     SDL_SetWindowSize(window, width, height);
@@ -168,6 +204,9 @@ bool platformInit(int reqW, int reqH, const char *title, bool headless) {
     }
 
     Uint32 flags = (gfx == SOFTWARE ? 0 : SDL_WINDOW_OPENGL) | (headless ? SDL_WINDOW_HIDDEN : SDL_WINDOW_RESIZABLE);
+#ifdef PLATFORM_IOS
+    flags = SDL_WINDOW_OPENGL | SDL_WINDOW_FULLSCREEN | SDL_WINDOW_BORDERLESS | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+#endif
     fbWidth = reqW;
     fbHeight = reqH;
 
@@ -200,8 +239,71 @@ bool platformInit(int reqW, int reqH, const char *title, bool headless) {
     } else
         scr = SDL_GetWindowSurface(window);
 
+#ifdef PLATFORM_IOS
+    SDL_GetWindowSizeInPixels(window, &fbWidth, &fbHeight);
+    TouchOverlay_install(
+        SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_UIKIT_WINDOW_POINTER, NULL),
+        platformOverlayKeyDown,
+        platformOverlayKeyUp
+    );
+#endif
+
     return true;
 }
+
+#ifdef PLATFORM_IOS
+// SDL renders into its own framebuffer object on iOS, there's no "framebuffer 0"
+uint32_t platformGetHostFramebuffer(void) {
+    return (uint32_t)SDL_GetNumberProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_UIKIT_OPENGL_FRAMEBUFFER_NUMBER, 0);
+}
+
+void platformShowQuickSaveResult(int result) {
+    switch ((QuickSaveResult) result) {
+        case QUICKSAVE_SAVED:       TouchOverlay_showMessage("Game saved"); break;
+        case QUICKSAVE_BUSY:        TouchOverlay_showMessage("Can't save right now"); break;
+        case QUICKSAVE_UNSUPPORTED: break;
+    }
+}
+
+void platformShowQuickLoadResult(int result) {
+    switch ((QuickLoadResult) result) {
+        case QUICKLOAD_LOADED:      TouchOverlay_showMessage("Game loaded"); break;
+        case QUICKLOAD_NO_SAVE:     TouchOverlay_showMessage("No save to load"); break;
+        case QUICKLOAD_BUSY:        TouchOverlay_showMessage("Can't load right now"); break;
+        case QUICKLOAD_UNSUPPORTED: break;
+    }
+}
+
+// Presses `key` while both buttons are held on any controller (GML button indices)
+static void handleCombo(int buttonA, int buttonB, int32_t key, bool* wasDown) {
+    bool down = false;
+    for (int i = 0; i < MAX_GAMEPADS; i++) {
+        GamepadSlot* slot = g_runner->gamepads->slots + i;
+        if (slot->connected && slot->buttonDown[buttonA] && slot->buttonDown[buttonB]) down = true;
+    }
+    if (down != *wasDown) {
+        if (down) RunnerKeyboard_onKeyDown(g_runner->keyboard, key);
+        else RunnerKeyboard_onKeyUp(g_runner->keyboard, key);
+        *wasDown = down;
+    }
+}
+
+// Controllers don't get the on-screen buttons: L1 + R1 quick saves, L2 + R2 quick loads
+static void handleQuickSaveCombo(void) {
+    static bool saveWasDown = false, loadWasDown = false;
+    handleCombo(4, 5, VK_F7, &saveWasDown);
+    handleCombo(6, 7, VK_F9, &loadWasDown); // 6 and 7 are the triggers (IDX_LT, IDX_RT below)
+}
+
+// Blocks while the app is in the background, iOS kills apps that issue GL calls while backgrounded
+static void waitUntilForeground(void) {
+    glFinishProc();
+    SDL_Event e;
+    while (SDL_WaitEvent(&e)) {
+        if (e.type == SDL_EVENT_DID_ENTER_FOREGROUND) break;
+    }
+}
+#endif
 
 void platformExit(void) {
     SDL_Quit();
@@ -468,6 +570,11 @@ bool platformHandleEvents(void) {
             case SDL_EVENT_QUIT:
                 should_exit = true;
                 break;
+#ifdef PLATFORM_IOS
+            case SDL_EVENT_WILL_ENTER_BACKGROUND:
+                waitUntilForeground();
+                break;
+#endif
             default:
                 break;
         }
@@ -522,6 +629,12 @@ bool platformHandleEvents(void) {
             slot->guid[0] = '\0';
         }
     }
+
+#ifdef PLATFORM_IOS
+    // A controller replaces the on-screen controls
+    TouchOverlay_setVisible(g_runner->gamepads->connectedCount == 0);
+    handleQuickSaveCombo();
+#endif
 
     return should_exit;
 }

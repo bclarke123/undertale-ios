@@ -1029,4 +1029,7 @@ static inline GMLReal Runner_getEffectiveGameSpeed(Runner* runner) {
     return 30.0;
 }
 
+// Runs a code entry (event or script) with `instance` as self, saving/restoring the VM state around it
+void Runner_executeCodeOnInstance(Runner* runner, Instance* instance, int32_t codeId);
+
 #endif /* _BS_RUNNER_H_ */

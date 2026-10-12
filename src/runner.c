@@ -262,6 +262,10 @@ static void executeCode(Runner* runner, Instance* instance, int32_t codeId) {
     }
 }
 
+void Runner_executeCodeOnInstance(Runner* runner, Instance* instance, int32_t codeId) {
+    executeCode(runner, instance, codeId);
+}
+
 const char* Runner_getEventName(int32_t eventType, int32_t eventSubtype) {
     switch (eventType) {
         case EVENT_CREATE:  return "Create";
